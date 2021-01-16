@@ -10,24 +10,36 @@ declare global {
 }
 
 export type FunctionScope = "all" | "asyn" | "syn";
-export type JsValue = string | number | boolean | null | {
-    [key: string]: JsValue,
-} | JsValue[];
+export type JsonValue = string | number | boolean | null | undefined | {
+    [key: string]: JsonValue;
+} | JsonValue[];
 
 export type Callback<R> = (result: R) => void;
-export type RegisterFun<T> = (...args: T[]) => void | T;
-export type RegisterAysnFun<T> = (args: T[], callback: Callback<string>) => void;
+export type SynFun<T> = (...args: T[]) => void | T;
+export type AysnCallback = (data: JsonValue, complete: true) => void;
+// 如果 native 要接受 js 的回调，则最后一个是 AysnCallback
+export type AysnFun<T> = (...args: T[]) => void;
 
+//js 端同步方法，很简单，直接返回 JSValue 即可
 export type SynObject = {
-    [key: string]: RegisterFun<JsValue>;
-} | RegisterFun<JsValue>;
+    [key: string]: SynFun<JsonValue>;
+} | SynFun<JsonValue>;
 
 export type AysnObject = {
-    [key: string]: RegisterAysnFun<JsValue>;
-} | RegisterAysnFun<JsValue>;
+    [key: string]: AysnFun<JsonValue>;
+} | AysnFun<JsonValue>;
+
+type NativeParams = {
+    method: string;
+    callbackId: number;
+    // native 传递的所有参数，传送给 js 前，会从数组转为 string
+    data: string;
+}
 
 interface Bridge {
-    call(nativeMethod: string, args?: JsValue | Callback<string>, callback?: Callback<string>): string | undefined;
+    // 调用 native 的同步 API，call function 返回值即为 string。(Android 可以返回 JSValue，但是 iOS 不行，降级处理)
+    // 调用 native 的异步 API，需要传入回调参数 Callback，来接受 native 完成后的回调。
+    call(nativeMethod: string, args?: JsonValue | Callback<string>, callback?: Callback<string>): JsonValue | undefined;
     register(handlerName: string, handler: SynObject | AysnObject, async?: boolean): void;
     registerAsyn(handlerName: string, handler: AysnObject): void;
     hasNativeMethod(handlerName: string, type?: FunctionScope): boolean;
@@ -35,7 +47,7 @@ interface Bridge {
 }
 
 const dsBridge = (function() {
-    const call = (nativeMethod: string, parameter?: JsValue | Callback<string>, callback?: Callback<string>) => {
+    const call = (nativeMethod: string, parameter?: JsonValue | Callback<string>, callback?: Callback<string>) => {
 
         if (typeof parameter === "function") {
             callback = parameter;
@@ -100,9 +112,19 @@ type BridgeFunctionObject = {
     dsBridge: Bridge;
     close: () => void;
     _handleMessageFromNative: (natvieInfo: any) => void;
-    _dsf: any;
-    _dsaf: any;
+    _dsf: {
+        [key: string]: SynObject;
+    };
+    _dsaf: {
+        [key: string]: AysnObject;
+    }
 };
+
+type JsReturnValue = {
+    data: JsonValue;
+    id: number;
+    complete: boolean;
+}
 
 (function(): void {
     if (window._dsf) {
@@ -120,36 +142,37 @@ type BridgeFunctionObject = {
         close: function(): void {
             dsBridge.call("_dsb.closePage");
         },
-        _handleMessageFromNative: (info: any) => {
+        _handleMessageFromNative: (info: NativeParams) => {
             const {method, data, callbackId} = info;
-            const nativeArg = JSON.parse(data) as any[];
-            const ret = {
+            const nativeArgs = JSON.parse(data) as JsonValue[];
+            const ret: JsReturnValue = {
                 data: "",
                 id: callbackId,
                 complete: true,
             };
 
-            const fun = this._dsf[method];
-            const asynFunc = this._dsaf[method];
-            const callSyn = (fn: any, ob: any) => {
-                ret.data = fun.apply(ob, nativeArg);
+            const syncfun = (this as BridgeFunctionObject)._dsf[method] as SynFun<JsonValue>;
+            const asynFunc = (this as BridgeFunctionObject)._dsaf[method] as AysnFun<JsonValue>;
+            const callSyn = (fn: SynFun<JsonValue>, ob: SynObject) => {
+                ret.data = fn.apply(ob, nativeArgs) as JsonValue;
                 dsBridge.call("_dsb.returnValue", ret);
             };
-            const callAsyn = (fn: any, ob: any) => {
-                nativeArg.push((data: string, complete: boolean= true) => {
+
+            const callAsyn = (fn: AysnFun<any>, ob: AysnObject) => {
+                const nativeArgsAndCallback: any[] = (nativeArgs as any).push((data: string, complete: boolean = true) => {
                     ret.data = data,
                     ret.complete = complete;
                     dsBridge.call("_dsb.returnValue", ret);
                 });
-                fn.apply(ob, nativeArg);
+                fn.apply(ob, nativeArgsAndCallback);
             };
-            if (fun) {
-                callSyn(fun, this._dsf);
+            if (syncfun) {
+                callSyn(syncfun, this._dsf);
             } else if (asynFunc) {
                 callAsyn(asynFunc, this._dsaf);
             } else {
                 const delimiter = ".";
-                const name = (method as string).split(delimiter);
+                const name = method.split(delimiter);
                 if (name.length < 2) {
                     return;
                 }
@@ -178,15 +201,18 @@ type BridgeFunctionObject = {
     const _dsf = ob._dsf;
     const _dsaf = ob._dsaf;
 
-    dsBridge.register("_hasJavascriptMethod", function (method: string): boolean {
+    dsBridge.register("_hasJavascriptMethod", function(method): boolean {
+        if (typeof method !== "string") {
+            return false;
+        }
         const splitName = method.split('.');
         if (splitName.length < 2) {
             return !!(_dsf[method]||_dsaf[method]);
         } else {
-           var methodName = splitName.pop();
+           var methodName = splitName.pop() as string;
            var namespace = splitName.join('.');
            var ob = _dsf._obs[namespace] || _dsaf._obs[namespace];
-           return ob && !!ob[method];
+           return ob && !!ob[methodName];
         }
     })
 }());
