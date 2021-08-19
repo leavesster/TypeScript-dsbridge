@@ -1,31 +1,35 @@
 declare global {
     interface Window {
         dscb: number;
+        // Android 注入，表示 js 可以从 native 端直接拿到回调
         _dsbridge?: any;
+        // iOS WKWebview 注入
         _dswk?: any;
+        // 存储加回调方法的对象
         _dsaf: any;
+        // 存储不加回调方法的对象
         _dsf: any;
         _dsInit: boolean;
     }
 }
 
-export type FunctionScope = "all" | "asyn" | "syn";
-export type JsonValue = string | number | boolean | null | undefined | {
+type FunctionScope = "all" | "asyn" | "syn";
+type JsonValue = string | number | boolean | null | undefined | {
     [key: string]: JsonValue;
 } | JsonValue[];
 
-export type Callback<R> = (result: R) => void;
-export type SynFun<T> = (...args: T[]) => void | T;
-export type AsyncCallback = (data: JsonValue, complete: true) => void;
+type Callback<R> = (result: R) => void;
+type SynFun<T> = (...args: T[]) => void | T;
+type AsyncCallback = (data: JsonValue, complete: true) => void;
 // 如果 native 要接受 js 的回调，则最后一个是 AsyncCallback
-export type AsyncFun<T> = (...args: T[]) => void;
+type AsyncFun<T> = (...args: T[]) => void;
 
-//js 端同步方法，很简单，直接返回 JSValue 即可
-export type SynObject = {
+// js 端同步方法，很简单，直接返回 JSValue 即可
+type SynObject = {
     [key: string]: SynFun<JsonValue>;
 } | SynFun<JsonValue>;
 
-export type AsyncObject = {
+type AsyncObject = {
     [key: string]: AsyncFun<JsonValue>;
 } | AsyncFun<JsonValue>;
 
@@ -37,11 +41,13 @@ type NativeParams = {
 }
 
 interface Bridge {
-    // 调用 native 的同步 API，call function 返回值即为 string。(Android 可以返回 JSValue，但是 iOS 不行，降级处理)
+    // 调用 native 的同步 API，call function 返回值即为 string。(Android 可以返回 JSValue，iOS 通过 prompt 实现相同效果)
     // 调用 native 的异步 API，需要传入回调参数 Callback，来接受 native 完成后的回调。
     call(nativeMethod: string, args?: JsonValue | Callback<string>, callback?: Callback<string>): JsonValue | undefined;
+
     register(handlerName: string, handler: SynObject | AsyncObject, async?: boolean): void;
     registerAsyn(handlerName: string, handler: AsyncObject): void;
+
     hasNativeMethod(handlerName: string, type?: FunctionScope): boolean;
     disableJavascriptDialogBlock(disable?: boolean): void;
 }
